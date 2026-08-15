@@ -14,27 +14,32 @@ app = FastAPI(title="Schedule AI")
 START = datetime(2026, 8, 12)
 END = START + timedelta(days=29)
 
-SEED = [
-    ("Team Stand-up", "2026-08-12", "10:00", "meeting", 30),
-    ("RAG Architecture Workshop", "2026-08-13", "14:00", "workshop", 120),
-    ("Doctor Appointment", "2026-08-14", "11:30", "appointment", 60),
-    ("Project Planning Meeting", "2026-08-15", "15:00", "meeting", 60),
-    ("Submit Project Report", "2026-08-17", "17:00", "task", 30),
-    ("Client Review", "2026-08-18", "16:00", "meeting", 60),
-    ("Python Workshop", "2026-08-20", "10:00", "workshop", 90),
-    ("Dentist Appointment", "2026-08-22", "12:00", "appointment", 60),
-    ("Sprint Retrospective", "2026-08-25", "15:00", "meeting", 60),
-    ("Prepare Presentation", "2026-08-27", "18:00", "task", 60),
-    ("Product Demo", "2026-09-01", "11:00", "meeting", 60),
-    ("AI Research Workshop", "2026-09-03", "14:30", "workshop", 120),
-    ("Monthly Planning", "2026-09-05", "10:00", "meeting", 60),
-]
+SEED = []
+current = START
+while current <= END:
+    if current.weekday() <= 2:
+        end_time = "16:00"
+        duration = 420
+    elif current.weekday() <= 4:
+        end_time = "15:00"
+        duration = 360
+    else:
+        current += timedelta(days=1)
+        continue
+    SEED.append((
+        "College",
+        current.strftime("%Y-%m-%d"),
+        "09:00",
+        "college",
+        duration
+    ))
+    current += timedelta(days=1)
 
 db = chromadb.PersistentClient(
     path=os.getenv("CHROMA_PATH", "./chroma_db")
 )
 
-collection = db.get_or_create_collection("schedule")
+collection = db.get_or_create_collection("college_schedule")
 
 
 def event_text(event):
@@ -520,6 +525,29 @@ def agent(message):
                 result
             )
 
+    # COLLEGE ENDING / COLLEGE SCHEDULE
+    if any(word in text for word in [
+        "college", "college ending", "college ends",
+        "college ending time", "when does college end",
+        "when is my college ending"
+    ]):
+        requested_date = date or START.strftime("%Y-%m-%d")
+        day = datetime.strptime(requested_date, "%Y-%m-%d")
+        if day.weekday() <= 2:
+            ending = "4:00 PM"
+        elif day.weekday() <= 4:
+            ending = "3:00 PM"
+        else:
+            ending = "No college scheduled"
+        return (
+            "college_schedule",
+            {
+                "date": requested_date,
+                "day": day.strftime("%A"),
+                "ending": ending
+            }
+        )
+
     # RETRIEVAL
     if "afternoon" in text:
 
@@ -559,6 +587,17 @@ def make_answer(
     tool,
     result
 ):
+
+    if tool == "college_schedule":
+        if result["ending"] == "No college scheduled":
+            return (
+                f"{result['day']} ({result['date']}): "
+                "No college is scheduled."
+            )
+        return (
+            f"Your college ends at {result['ending']} "
+            f"on {result['day']} ({result['date']})."
+        )
 
     if isinstance(result, dict):
 
@@ -776,6 +815,20 @@ color:#8b94a8;
 margin-top:12px
 }
 
+.login-card{
+background:white;border:1px solid #e1e6ef;border-radius:16px;
+padding:16px 20px;margin-bottom:25px;display:flex;
+justify-content:space-between;align-items:center;
+box-shadow:0 5px 20px #26345c0b
+}
+.login-card strong{display:block;font-size:15px;margin-bottom:5px}
+.login-card small{color:#8992a5}
+.google-login{background:white;border:1px solid #d9deea;border-radius:10px;
+padding:11px 16px;cursor:pointer;font-weight:600;display:flex;
+align-items:center;gap:9px}
+.google-icon{font-weight:800;font-size:18px}
+.google-login:hover{background:#f7f8fc}
+
 @media(max-width:700px){
 
 .sidebar{
@@ -828,19 +881,19 @@ Schedule<span>AI</span>
 
 <br><br>
 
-What do I have tomorrow?
+When is my college ending today?
 
 <br>
 
-Am I free Friday afternoon?
+When does college end on Friday?
 
 <br>
 
-Add a meeting on August 15 at 3 PM.
+When does college end tomorrow?
 
 <br>
 
-Move my meeting from 2 PM to 4 PM.
+What is my college schedule this week?
 
 </div>
 
@@ -848,16 +901,26 @@ Move my meeting from 2 PM to 4 PM.
 
 <main class="main">
 
+<div class="login-card">
+<div>
+<strong>Welcome to ScheduleAI</strong>
+<small>Sign in to manage your personal schedule</small>
+</div>
+<button class="google-login" onclick="googleLogin()">
+<span class="google-icon">G</span> Sign in with Google
+</button>
+</div>
+
 <div class="header">
 
 <div>
 
 <h1>
-Your schedule, understood.
+Your college schedule, understood.
 </h1>
 
 <div class="subtitle">
-Ask naturally. The agent searches or updates your calendar.
+Ask about college timings, free time, or your schedule.
 </div>
 
 </div>
@@ -871,10 +934,10 @@ Ask naturally. The agent searches or updates your calendar.
 <div class="quick">
 
 <button onclick="ask('What do I have scheduled tomorrow?')">
-Tomorrow
+College Today
 </button>
 
-<button onclick="ask('Am I free Friday afternoon?')">
+<button onclick="ask('When does college end on Friday?')">
 Friday afternoon
 </button>
 
@@ -892,9 +955,7 @@ Meetings
 
 <div class="message bot">
 
-Hi! I’m your AI Schedule Assistant.
-
-I can search your 30-day schedule and add, move, or remove events.
+Hi! I’m your AI College Schedule Assistant.\n\nI can tell you when college ends, check your schedule, and manage events.
 
 </div>
 
@@ -916,8 +977,7 @@ Send
 
 <div class="footer">
 
-FastAPI + ChromaDB • 30-day schedule •
-Agent tools: get_schedule, update_schedule
+FastAPI + ChromaDB • College timetable • Agent tools: get_schedule, update_schedule
 
 </div>
 
@@ -949,6 +1009,10 @@ document.getElementById("question").value=text;
 
 send();
 
+}
+
+function googleLogin(){
+alert("Google sign-in requires your Firebase/Google OAuth configuration. The login interface is ready.");
 }
 
 async function send(){
