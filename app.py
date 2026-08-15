@@ -2,302 +2,1054 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta
-from typing import Any
 
 import chromadb
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="Agentic RAG Schedule Assistant", version="1.0.0")
+app = FastAPI(title="Schedule AI")
 
-# -------------------------------------------------------------------
-# Sample schedule: 30 days from 2026-08-12 through 2026-09-10.
-# Chroma stores the searchable schedule documents.
-# -------------------------------------------------------------------
+# 30-day schedule
 START = datetime(2026, 8, 12)
 END = START + timedelta(days=29)
 
-SAMPLE_EVENTS = [
-    {"title": "Team Stand-up", "date": "2026-08-12", "time": "10:00", "type": "meeting", "duration": 30},
-    {"title": "RAG Architecture Workshop", "date": "2026-08-13", "time": "14:00", "type": "workshop", "duration": 120},
-    {"title": "Doctor Appointment", "date": "2026-08-14", "time": "11:30", "type": "appointment", "duration": 60},
-    {"title": "Project Planning Meeting", "date": "2026-08-15", "time": "15:00", "type": "meeting", "duration": 60},
-    {"title": "Submit Project Report", "date": "2026-08-17", "time": "17:00", "type": "task", "duration": 30},
-    {"title": "Client Review", "date": "2026-08-18", "time": "16:00", "type": "meeting", "duration": 60},
-    {"title": "Python Workshop", "date": "2026-08-20", "time": "10:00", "type": "workshop", "duration": 90},
-    {"title": "Dentist Appointment", "date": "2026-08-22", "time": "12:00", "type": "appointment", "duration": 60},
-    {"title": "Sprint Retrospective", "date": "2026-08-25", "time": "15:00", "type": "meeting", "duration": 60},
-    {"title": "Prepare Presentation", "date": "2026-08-27", "time": "18:00", "type": "task", "duration": 60},
-    {"title": "Product Demo", "date": "2026-09-01", "time": "11:00", "type": "meeting", "duration": 60},
-    {"title": "AI Research Workshop", "date": "2026-09-03", "time": "14:30", "type": "workshop", "duration": 120},
-    {"title": "Monthly Planning", "date": "2026-09-05", "time": "10:00", "type": "meeting", "duration": 60},
+SEED = [
+    ("Team Stand-up", "2026-08-12", "10:00", "meeting", 30),
+    ("RAG Architecture Workshop", "2026-08-13", "14:00", "workshop", 120),
+    ("Doctor Appointment", "2026-08-14", "11:30", "appointment", 60),
+    ("Project Planning Meeting", "2026-08-15", "15:00", "meeting", 60),
+    ("Submit Project Report", "2026-08-17", "17:00", "task", 30),
+    ("Client Review", "2026-08-18", "16:00", "meeting", 60),
+    ("Python Workshop", "2026-08-20", "10:00", "workshop", 90),
+    ("Dentist Appointment", "2026-08-22", "12:00", "appointment", 60),
+    ("Sprint Retrospective", "2026-08-25", "15:00", "meeting", 60),
+    ("Prepare Presentation", "2026-08-27", "18:00", "task", 60),
+    ("Product Demo", "2026-09-01", "11:00", "meeting", 60),
+    ("AI Research Workshop", "2026-09-03", "14:30", "workshop", 120),
+    ("Monthly Planning", "2026-09-05", "10:00", "meeting", 60),
 ]
 
-chroma = chromadb.PersistentClient(path=os.getenv("CHROMA_PATH", "./chroma_db"))
-collection = chroma.get_or_create_collection(name="schedule")
+db = chromadb.PersistentClient(
+    path=os.getenv("CHROMA_PATH", "./chroma_db")
+)
+
+collection = db.get_or_create_collection("schedule")
 
 
-def valid_date(value: str) -> bool:
-    try:
-        d = datetime.strptime(value, "%Y-%m-%d")
-        return START.date() <= d.date() <= END.date()
-    except ValueError:
-        return False
+def event_text(event):
+    return (
+        f"{event['title']} on {event['date']} at {event['time']}. "
+        f"{event['type']} for {event['duration']} minutes."
+    )
 
 
 def seed_database():
     if collection.count() > 0:
         return
-    ids, docs, metas = [], [], []
-    for e in SAMPLE_EVENTS:
-        eid = str(uuid.uuid4())
-        ids.append(eid)
-        docs.append(
-            f"{e['title']} on {e['date']} at {e['time']}. "
-            f"Type: {e['type']}. Duration: {e['duration']} minutes."
+
+    for title, date, time, kind, duration in SEED:
+        event = {
+            "id": str(uuid.uuid4()),
+            "title": title,
+            "date": date,
+            "time": time,
+            "type": kind,
+            "duration": duration,
+        }
+
+        collection.add(
+            ids=[event["id"]],
+            documents=[event_text(event)],
+            metadatas=[event],
         )
-        metas.append({**e, "id": eid})
-    collection.add(ids=ids, documents=docs, metadatas=metas)
 
 
 seed_database()
 
 
-def all_events() -> list[dict[str, Any]]:
-    data = collection.get(include=["metadatas"])
-    return [dict(x) for x in data["metadatas"]]
+# ============================================================
+# TOOL 1: GET SCHEDULE
+# ============================================================
 
+def get_schedule(
+    query="",
+    date=None,
+    start=None,
+    end=None
+):
+    """
+    Retrieves relevant schedule information
+    using ChromaDB semantic search.
+    """
 
-def event_text(e: dict[str, Any]) -> str:
-    return (
-        f"{e['title']} on {e['date']} at {e['time']} "
-        f"({e['type']}, {e.get('duration', 60)} minutes)"
+    count = collection.count()
+    results_count = min(max(count, 1), 20)
+
+    results = collection.query(
+        query_texts=[query or date or "schedule"],
+        n_results=results_count
     )
 
+    items = results.get("metadatas", [[]])[0]
 
-def add_to_index(e: dict[str, Any]):
-    eid = e.get("id") or str(uuid.uuid4())
-    e["id"] = eid
-    collection.add(
-        ids=[eid],
-        documents=[event_text(e)],
-        metadatas=[e],
-    )
-
-
-def replace_in_index(e: dict[str, Any]):
-    collection.delete(ids=[e["id"]])
-    add_to_index(e)
-
-
-def parse_date(text: str) -> str | None:
-    m = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", text)
-    if m:
-        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-    m = re.search(r"\b(august|september)\s+(\d{1,2})\b", text, re.I)
-    if m:
-        month = 8 if m.group(1).lower() == "august" else 9
-        return f"2026-{month:02d}-{int(m.group(2)):02d}"
-    weekdays = {
-        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-        "friday": 4, "saturday": 5, "sunday": 6,
-    }
-    lower = text.lower()
-    base = START
-    if "tomorrow" in lower:
-        return (base + timedelta(days=1)).strftime("%Y-%m-%d")
-    if "today" in lower:
-        return base.strftime("%Y-%m-%d")
-    for day, idx in weekdays.items():
-        if day in lower:
-            delta = (idx - base.weekday()) % 7
-            if "next " + day in lower and delta == 0:
-                delta = 7
-            return (base + timedelta(days=delta)).strftime("%Y-%m-%d")
-    return None
-
-
-def parse_time(text: str) -> str | None:
-    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text, re.I)
-    if not m:
-        return None
-    h, minute, ap = int(m.group(1)), int(m.group(2) or 0), m.group(3).lower()
-    if ap == "pm" and h != 12:
-        h += 12
-    if ap == "am" and h == 12:
-        h = 0
-    return f"{h:02d}:{minute:02d}"
-
-
-def get_schedule(query: str = "", date: str | None = None,
-                 start_time: str | None = None, end_time: str | None = None):
-    """Tool 1: retrieve schedule information with Chroma RAG."""
-    q = query or date or "schedule"
-    result = collection.query(query_texts=[q], n_results=min(8, max(1, collection.count())))
-    hits = result.get("metadatas", [[]])[0]
     if date:
-        hits = [e for e in hits if e.get("date") == date]
-    if start_time:
-        hits = [e for e in hits if e.get("time", "00:00") >= start_time]
-    if end_time:
-        hits = [e for e in hits if e.get("time", "23:59") <= end_time]
-    return sorted(hits, key=lambda x: (x.get("date", ""), x.get("time", "")))
+        items = [
+            event for event in items
+            if event["date"] == date
+        ]
+
+    if start:
+        items = [
+            event for event in items
+            if event["time"] >= start
+        ]
+
+    if end:
+        items = [
+            event for event in items
+            if event["time"] <= end
+        ]
+
+    return sorted(
+        items,
+        key=lambda x: (x["date"], x["time"])
+    )
 
 
-def update_schedule(action: str, event: dict[str, Any] | None = None,
-                    event_id: str | None = None, changes: dict[str, Any] | None = None):
-    """Tool 2: add, update, or remove schedule entries."""
+# ============================================================
+# TOOL 2: UPDATE SCHEDULE
+# ============================================================
+
+def update_schedule(
+    action,
+    event=None,
+    event_id=None,
+    changes=None
+):
+    """
+    Adds, updates, or removes schedule entries.
+    """
+
     if action == "add":
-        e = dict(event or {})
-        if not e.get("title") or not e.get("date") or not e.get("time"):
-            raise ValueError("title, date and time are required")
-        if not valid_date(e["date"]):
-            raise ValueError("Date must be within the 30-day schedule window.")
-        e.setdefault("type", "meeting")
-        e.setdefault("duration", 60)
-        add_to_index(e)
-        return e
 
-    events = all_events()
-    target = next((x for x in events if x.get("id") == event_id), None)
-    if not target:
-        raise ValueError("Schedule entry not found.")
+        new_event = dict(event)
+
+        new_event.setdefault(
+            "id",
+            str(uuid.uuid4())
+        )
+
+        new_event.setdefault(
+            "type",
+            "meeting"
+        )
+
+        new_event.setdefault(
+            "duration",
+            60
+        )
+
+        collection.add(
+            ids=[new_event["id"]],
+            documents=[event_text(new_event)],
+            metadatas=[new_event],
+        )
+
+        return new_event
+
+    stored = collection.get(
+        ids=[event_id],
+        include=["metadatas"]
+    )
+
+    if not stored["metadatas"]:
+        raise ValueError(
+            "Schedule entry not found."
+        )
+
+    old_event = dict(
+        stored["metadatas"][0]
+    )
 
     if action == "remove":
-        collection.delete(ids=[target["id"]])
-        return target
+
+        collection.delete(
+            ids=[event_id]
+        )
+
+        return old_event
 
     if action == "update":
-        target.update(changes or {})
-        if not valid_date(target["date"]):
-            raise ValueError("Updated date must be within the 30-day schedule window.")
-        replace_in_index(target)
-        return target
 
-    raise ValueError("action must be add, update, or remove")
+        old_event.update(
+            changes or {}
+        )
+
+        collection.delete(
+            ids=[event_id]
+        )
+
+        collection.add(
+            ids=[event_id],
+            documents=[event_text(old_event)],
+            metadatas=[old_event],
+        )
+
+        return old_event
+
+    raise ValueError(
+        "Unknown schedule action."
+    )
 
 
-def find_matching_event(text: str):
-    events = all_events()
-    lower = text.lower()
-    candidates = [e for e in events if e["title"].lower() in lower]
-    if candidates:
-        return candidates[0]
-    d = parse_date(text)
-    t = parse_time(text)
-    if d:
-        same_day = [e for e in events if e["date"] == d]
-        if t:
-            same_day.sort(key=lambda e: abs(
-                int(e["time"][:2]) * 60 + int(e["time"][3:]) -
-                (int(t[:2]) * 60 + int(t[3:]))
-            ))
-        return same_day[0] if same_day else None
+# ============================================================
+# DATE PARSER
+# ============================================================
+
+def get_date(text):
+
+    text = text.lower()
+
+    if "today" in text:
+        return START.strftime("%Y-%m-%d")
+
+    if "tomorrow" in text:
+        return (
+            START + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+
+    match = re.search(
+        r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b",
+        text
+    )
+
+    if match:
+        return (
+            f"{int(match[1]):04d}-"
+            f"{int(match[2]):02d}-"
+            f"{int(match[3]):02d}"
+        )
+
+    match = re.search(
+        r"\b(august|september)\s+(\d{1,2})\b",
+        text
+    )
+
+    if match:
+
+        month = (
+            8
+            if match[1].lower() == "august"
+            else 9
+        )
+
+        return (
+            f"2026-{month:02d}-"
+            f"{int(match[2]):02d}"
+        )
+
+    weekdays = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+
+    for day, number in weekdays.items():
+
+        if day in text:
+
+            difference = (
+                number - START.weekday()
+            ) % 7
+
+            if (
+                "next " + day in text
+                and difference == 0
+            ):
+                difference = 7
+
+            return (
+                START + timedelta(days=difference)
+            ).strftime("%Y-%m-%d")
+
     return None
 
 
-def agent(message: str):
-    """Small agentic router: decides whether to retrieve or mutate."""
-    lower = message.lower()
+# ============================================================
+# TIME PARSER
+# ============================================================
 
-    mutation_words = ["add ", "create ", "schedule ", "book ", "move ",
-                      "reschedule ", "update ", "change ", "remove ",
-                      "delete ", "cancel "]
-    is_mutation = any(w in lower for w in mutation_words)
+def get_times(text):
 
-    # UPDATE: move/reschedule/change an existing event.
-    if is_mutation and any(w in lower for w in ["move ", "reschedule ", "change "]):
-        old = find_matching_event(message)
-        new_time = parse_time(message)
-        new_date = parse_date(message)
-        if old and (new_time or new_date):
-            changes = {}
-            if new_time:
-                changes["time"] = new_time
-            if new_date:
-                changes["date"] = new_date
-            updated = update_schedule("update", event_id=old["id"], changes=changes)
-            return {"tool": "update_schedule", "action": "update", "result": updated}
+    times = []
+
+    pattern = (
+        r"\b(\d{1,2})"
+        r"(?::(\d{2}))?"
+        r"\s*(am|pm)\b"
+    )
+
+    for match in re.finditer(
+        pattern,
+        text.lower()
+    ):
+
+        hour = int(match[1])
+        minute = int(match[2] or 0)
+        period = match[3]
+
+        if period == "pm" and hour != 12:
+            hour += 12
+
+        if period == "am" and hour == 12:
+            hour = 0
+
+        times.append(
+            f"{hour:02d}:{minute:02d}"
+        )
+
+    return times
+
+
+# ============================================================
+# EVENT SEARCH
+# ============================================================
+
+def all_events():
+
+    return collection.get(
+        include=["metadatas"]
+    )["metadatas"]
+
+
+def find_event(text, old_time=None):
+
+    lower = text.lower()
+
+    for event in all_events():
+
+        if event["title"].lower() in lower:
+            return event
+
+    date = get_date(text)
+
+    candidates = [
+        event
+        for event in all_events()
+        if not date
+        or event["date"] == date
+    ]
+
+    if old_time:
+
+        candidates = [
+            event
+            for event in candidates
+            if event["time"] == old_time
+        ]
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    return None
+
+
+# ============================================================
+# AGENT
+# ============================================================
+
+def agent(message):
+
+    text = message.lower()
+
+    date = get_date(text)
+    times = get_times(text)
+
+    mutation_words = [
+        "add ",
+        "create ",
+        "schedule ",
+        "book ",
+        "move ",
+        "reschedule ",
+        "change ",
+        "update ",
+        "remove ",
+        "delete ",
+        "cancel ",
+    ]
+
+    is_mutation = any(
+        word in text
+        for word in mutation_words
+    )
+
+    # MOVE / RESCHEDULE
+    if (
+        is_mutation
+        and any(
+            word in text
+            for word in [
+                "move ",
+                "reschedule ",
+                "change "
+            ]
+        )
+    ):
+
+        old_time = (
+            times[0]
+            if len(times) > 1
+            else None
+        )
+
+        new_time = (
+            times[-1]
+            if times
+            else None
+        )
+
+        target = find_event(
+            text,
+            old_time
+        )
+
+        if target and new_time:
+
+            changes = {
+                "time": new_time
+            }
+
+            if date:
+                changes["date"] = date
+
+            result = update_schedule(
+                "update",
+                event_id=target["id"],
+                changes=changes
+            )
+
+            return (
+                "update_schedule",
+                result
+            )
 
     # REMOVE
-    if is_mutation and any(w in lower for w in ["remove ", "delete ", "cancel "]):
-        old = find_matching_event(message)
-        if old:
-            removed = update_schedule("remove", event_id=old["id"])
-            return {"tool": "update_schedule", "action": "remove", "result": removed}
+    if (
+        is_mutation
+        and any(
+            word in text
+            for word in [
+                "remove ",
+                "delete ",
+                "cancel "
+            ]
+        )
+    ):
+
+        target = find_event(
+            text,
+            times[0] if times else None
+        )
+
+        if target:
+
+            result = update_schedule(
+                "remove",
+                event_id=target["id"]
+            )
+
+            return (
+                "update_schedule",
+                result
+            )
 
     # ADD
-    if is_mutation and any(w in lower for w in ["add ", "create ", "schedule ", "book "]):
-        d = parse_date(message)
-        t = parse_time(message)
-        if d and t:
-            title = "New Meeting"
-            m = re.search(r"(?:add|create|schedule|book)\s+(?:a\s+)?(.+?)\s+on\s+"
-                          r"(?:august|september|\d{4}[-/])", message, re.I)
-            if m:
-                title = m.group(1).strip()
-            event = {"title": title, "date": d, "time": t, "type": "meeting", "duration": 60}
-            return {"tool": "update_schedule", "action": "add",
-                    "result": update_schedule("add", event=event)}
+    if (
+        is_mutation
+        and any(
+            word in text
+            for word in [
+                "add ",
+                "create ",
+                "schedule ",
+                "book "
+            ]
+        )
+    ):
 
-    # GET: date, time, free/busy, or semantic query.
-    d = parse_date(message)
-    if "afternoon" in lower:
-        return {"tool": "get_schedule", "result": get_schedule(message, d, "12:00", "17:00")}
-    if "morning" in lower:
-        return {"tool": "get_schedule", "result": get_schedule(message, d, "08:00", "12:00")}
-    return {"tool": "get_schedule", "result": get_schedule(message, d)}
+        if date and times:
 
+            match = re.search(
+                r"(?:add|create|schedule|book)"
+                r"\s+(?:a\s+)?(.+?)"
+                r"\s+(?:on|for)\s+",
+                message,
+                re.I
+            )
+
+            title = (
+                match.group(1).strip()
+                if match
+                else "New Meeting"
+            )
+
+            if title.lower() == "a meeting":
+                title = "New Meeting"
+
+            event = {
+                "title": title,
+                "date": date,
+                "time": times[0],
+                "type": "meeting",
+                "duration": 60,
+            }
+
+            result = update_schedule(
+                "add",
+                event=event
+            )
+
+            return (
+                "update_schedule",
+                result
+            )
+
+    # RETRIEVAL
+    if "afternoon" in text:
+
+        return (
+            "get_schedule",
+            get_schedule(
+                message,
+                date,
+                "12:00",
+                "17:00"
+            )
+        )
+
+    if "morning" in text:
+
+        return (
+            "get_schedule",
+            get_schedule(
+                message,
+                date,
+                "08:00",
+                "12:00"
+            )
+        )
+
+    return (
+        "get_schedule",
+        get_schedule(
+            message,
+            date
+        )
+    )
+
+
+def make_answer(
+    question,
+    tool,
+    result
+):
+
+    if isinstance(result, dict):
+
+        return (
+            f"Done — {result['title']} "
+            f"is scheduled for "
+            f"{result['date']} at "
+            f"{result['time']}."
+        )
+
+    if not result:
+
+        if "free" in question.lower():
+
+            return (
+                "You are free during "
+                "that requested period."
+            )
+
+        return (
+            "No matching schedule "
+            "entries found."
+        )
+
+    return "\n".join(
+        "• " + event_text(event)
+        for event in result
+    )
+
+
+# ============================================================
+# REQUEST MODEL
+# ============================================================
 
 class ChatRequest(BaseModel):
+
     message: str
 
 
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return """<!doctype html>
-<html><head><title>Schedule Assistant</title>
+# ============================================================
+# NEW UI
+# ============================================================
+
+PAGE = r"""
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+
+<title>Schedule AI</title>
+
 <style>
-body{font-family:Arial;max-width:850px;margin:40px auto;padding:0 18px;background:#f6f7fb}
-.card{background:white;padding:28px;border-radius:16px;box-shadow:0 5px 25px #0001}
-input{width:78%;padding:14px;border:1px solid #ddd;border-radius:9px}
-button{padding:14px 18px;border:0;border-radius:9px;cursor:pointer}
-#out{white-space:pre-wrap;margin-top:20px;line-height:1.5}
-</style></head>
-<body><div class="card">
-<h1>Agentic RAG Schedule Assistant</h1>
-<p>Ask about your schedule or add, move, and remove events.</p>
-<input id="q" placeholder="What do I have scheduled tomorrow?">
-<button onclick="ask()">Ask</button><div id="out"></div>
-</div><script>
-async function ask(){
- const q=document.getElementById('q').value;
- const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q})});
- const d=await r.json(); document.getElementById('out').textContent=d.answer;
+
+*{
+box-sizing:border-box
 }
-</script></body></html>"""
+
+body{
+margin:0;
+background:#f5f7fb;
+color:#172033;
+font-family:Arial,sans-serif
+}
+
+.layout{
+display:flex;
+min-height:100vh
+}
+
+.sidebar{
+width:240px;
+background:white;
+border-right:1px solid #e5e9f2;
+padding:28px 18px
+}
+
+.logo{
+font-size:23px;
+font-weight:800;
+margin-bottom:35px
+}
+
+.logo span{
+color:#6757e8
+}
+
+.nav{
+padding:12px 14px;
+margin:6px 0;
+border-radius:10px;
+color:#65708a
+}
+
+.nav.active{
+background:#eeeafd;
+color:#4f40c7;
+font-weight:700
+}
+
+.tip{
+margin-top:35px;
+background:#f4f2ff;
+border-radius:14px;
+padding:15px;
+color:#646b80;
+font-size:12px;
+line-height:1.7
+}
+
+.main{
+max-width:1000px;
+width:100%;
+margin:auto;
+padding:42px
+}
+
+.header{
+display:flex;
+justify-content:space-between;
+align-items:center
+}
+
+h1{
+margin:0;
+font-size:34px
+}
+
+.subtitle{
+color:#7a8498;
+margin-top:8px
+}
+
+.status{
+background:#e9f8ef;
+color:#23844a;
+padding:8px 12px;
+border-radius:20px;
+font-size:12px
+}
+
+.quick{
+display:flex;
+gap:9px;
+flex-wrap:wrap;
+margin:28px 0
+}
+
+.quick button{
+border:1px solid #dfe4ee;
+background:white;
+border-radius:9px;
+padding:10px 14px;
+cursor:pointer
+}
+
+.chat{
+background:white;
+border:1px solid #e1e6ef;
+border-radius:18px;
+padding:22px;
+min-height:420px;
+box-shadow:0 8px 30px #26345c0b
+}
+
+.message{
+max-width:78%;
+padding:14px 17px;
+border-radius:14px;
+margin:12px 0;
+white-space:pre-wrap;
+line-height:1.55
+}
+
+.bot{
+background:#f1f3f8
+}
+
+.user{
+margin-left:auto;
+background:#6757e8;
+color:white
+}
+
+.composer{
+display:flex;
+gap:10px;
+margin-top:15px
+}
+
+.composer input{
+flex:1;
+border:1px solid #dce2ec;
+border-radius:12px;
+padding:16px;
+font-size:15px
+}
+
+.composer button{
+border:0;
+background:#6757e8;
+color:white;
+border-radius:12px;
+padding:0 24px;
+font-weight:700;
+cursor:pointer
+}
+
+.footer{
+font-size:12px;
+color:#8b94a8;
+margin-top:12px
+}
+
+@media(max-width:700px){
+
+.sidebar{
+display:none
+}
+
+.main{
+padding:22px 15px
+}
+
+h1{
+font-size:27px
+}
+
+.message{
+max-width:95%
+}
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="layout">
+
+<aside class="sidebar">
+
+<div class="logo">
+Schedule<span>AI</span>
+</div>
+
+<div class="nav active">
+✦ Assistant
+</div>
+
+<div class="nav">
+▣ My Schedule
+</div>
+
+<div class="nav">
+◷ 30-Day Planner
+</div>
+
+<div class="tip">
+
+<b>Try asking</b>
+
+<br><br>
+
+What do I have tomorrow?
+
+<br>
+
+Am I free Friday afternoon?
+
+<br>
+
+Add a meeting on August 15 at 3 PM.
+
+<br>
+
+Move my meeting from 2 PM to 4 PM.
+
+</div>
+
+</aside>
+
+<main class="main">
+
+<div class="header">
+
+<div>
+
+<h1>
+Your schedule, understood.
+</h1>
+
+<div class="subtitle">
+Ask naturally. The agent searches or updates your calendar.
+</div>
+
+</div>
+
+<div class="status">
+● RAG ONLINE
+</div>
+
+</div>
+
+<div class="quick">
+
+<button onclick="ask('What do I have scheduled tomorrow?')">
+Tomorrow
+</button>
+
+<button onclick="ask('Am I free Friday afternoon?')">
+Friday afternoon
+</button>
+
+<button onclick="ask('Show my workshops')">
+Workshops
+</button>
+
+<button onclick="ask('Show my meetings')">
+Meetings
+</button>
+
+</div>
+
+<div id="chat" class="chat">
+
+<div class="message bot">
+
+Hi! I’m your AI Schedule Assistant.
+
+I can search your 30-day schedule and add, move, or remove events.
+
+</div>
+
+</div>
+
+<div class="composer">
+
+<input
+id="question"
+placeholder="Ask about your schedule..."
+onkeydown="if(event.key==='Enter') send()"
+>
+
+<button onclick="send()">
+Send
+</button>
+
+</div>
+
+<div class="footer">
+
+FastAPI + ChromaDB • 30-day schedule •
+Agent tools: get_schedule, update_schedule
+
+</div>
+
+</main>
+
+</div>
+
+<script>
+
+function addMessage(text,type){
+
+const box=document.createElement("div");
+
+box.className="message "+type;
+
+box.textContent=text;
+
+document.getElementById("chat").appendChild(box);
+
+box.scrollIntoView({
+behavior:"smooth"
+});
+
+}
+
+function ask(text){
+
+document.getElementById("question").value=text;
+
+send();
+
+}
+
+async function send(){
+
+const input=document.getElementById("question");
+
+const value=input.value.trim();
+
+if(!value)return;
+
+input.value="";
+
+addMessage(value,"user");
+
+addMessage("Thinking...","bot");
+
+const messages=document.querySelectorAll(".message");
+
+const bot=messages[messages.length-1];
+
+try{
+
+const response=await fetch(
+"/chat",
+{
+method:"POST",
+headers:{
+"Content-Type":"application/json"
+},
+body:JSON.stringify({
+message:value
+})
+}
+);
+
+const data=await response.json();
+
+bot.textContent=data.answer;
+
+}catch(error){
+
+bot.textContent=
+"Unable to reach the assistant.";
+
+}
+
+}
+
+</script>
+
+</body>
+
+</html>
+"""
+
+
+@app.get(
+    "/",
+    response_class=HTMLResponse
+)
+def home():
+
+    return PAGE
 
 
 @app.post("/chat")
-def chat(req: ChatRequest):
+def chat(request: ChatRequest):
+
     try:
-        result = agent(req.message)
-        items = result["result"]
-        if isinstance(items, dict):
-            answer = f"{items['title']} — {items['date']} at {items['time']}."
-        elif not items:
-            answer = "No matching schedule entries found."
-        else:
-            lines = [event_text(x) for x in items]
-            answer = "\n".join(lines)
-        return {"answer": answer, "tool": result["tool"], "data": items}
-    except Exception as exc:
-        return {"answer": f"Could not complete the request: {exc}", "error": str(exc)}
+
+        tool,result=agent(
+            request.message
+        )
+
+        return {
+            "answer":make_answer(
+                request.message,
+                tool,
+                result
+            ),
+            "tool":tool,
+            "data":result
+        }
+
+    except Exception as error:
+
+        return {
+            "answer":
+            f"Request failed: {error}",
+            "error":str(error)
+        }
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "events": collection.count(), "window": {
-        "start": START.strftime("%Y-%m-%d"), "end": END.strftime("%Y-%m-%d")
-    }}
+
+    return {
+        "status":"ok",
+        "tools":[
+            "get_schedule",
+            "update_schedule"
+        ],
+        "events":collection.count()
+    }
