@@ -1,5 +1,3 @@
 FINAL DEPLOYED URL
-Deployment pending: create the Render Web Service from this project and replace this line with the public Render URL.
-
-Expected format:
-https://<your-render-service-name>.onrender.com
+Deployment pending. Deploy the Render Web Service from the main branch, then replace this file with the real public URL.
+Expected format: https://<service-name>.onrender.com
