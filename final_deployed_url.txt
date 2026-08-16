@@ -1,3 +1,1 @@
-FINAL DEPLOYED URL
-Deployment pending. Deploy the Render Web Service from the main branch, then replace this file with the real public URL.
-Expected format: https://<service-name>.onrender.com
+https://ai-pro-hbpg.onrender.com/
