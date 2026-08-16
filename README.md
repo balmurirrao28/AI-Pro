@@ -1,86 +1,63 @@
-# College Schedule AI
+# ScheduleAI — Agentic RAG Schedule Assistant
 
-An Agentic RAG-based Schedule Assistant that manages a student's
-30-day college schedule using FastAPI and ChromaDB.
+A Render-ready Agentic RAG schedule assistant for the next 30 days.
 
-## Features
+## What it does
 
-- Agentic schedule assistant
-- ChromaDB vector database
-- RAG-based schedule retrieval
-- `get_schedule` tool
-- `update_schedule` tool
-- Add schedule entries
-- Update/move schedule entries
-- Remove schedule entries
-- College ending-time questions
-- 30-day schedule management
-- Responsive web interface
-- Google Login interface
-- Render deployment ready
+- Stores schedule events in **ChromaDB**.
+- Uses a lightweight deterministic local embedding function, so it does **not** need an API key or external embedding model.
+- Uses RAG/vector retrieval for open-ended schedule questions.
+- Has exactly two schedule tools:
+  - `get_schedule` — retrieve schedule by date, time, type, or natural-language query.
+  - `update_schedule` — add, update/move, or remove events.
+- Calculates free windows such as Friday afternoon.
+- Supports natural dates such as today, tomorrow, weekdays, and `August 15`.
+- Keeps the schedule inside a rolling 30-day window.
+- Includes sample meetings, workshops, tasks, appointments, and college entries.
+- Includes a responsive web interface and `/health` endpoint.
 
-## College Schedule
+## Example queries
 
-The assistant understands the following college timings:
-
-| Day | College Ends |
-|---|---|
-| Monday | 4:00 PM |
-| Tuesday | 4:00 PM |
-| Wednesday | 4:00 PM |
-| Thursday | 3:00 PM |
-| Friday | 3:00 PM |
-| Saturday | No College |
-| Sunday | No College |
-
-Example questions:
-
-- When is my college ending today?
-- When does college end tomorrow?
-- When does college end on Monday?
-- When does college end on Friday?
-- What is my college schedule this week?
+- What do I have scheduled tomorrow?
 - Am I free Friday afternoon?
 - Add a meeting on August 15 at 3 PM.
 - Move my meeting from 2 PM to 4 PM.
-- Remove my meeting.
+- Remove my workshop.
+- Show my meetings.
+- When does college end today?
 
-## Agent Tools
-
-### 1. get_schedule
-
-Retrieves relevant schedule information using ChromaDB
-semantic search based on:
-
-- User query
-- Date
-- Time
-- Morning
-- Afternoon
-
-### 2. update_schedule
-
-Manages schedule entries:
-
-- Add
-- Update
-- Move
-- Remove
-- Delete
-
-## Technology
-
-- Python
-- FastAPI
-- ChromaDB
-- HTML
-- CSS
-- JavaScript
-- Uvicorn
-
-## Run Locally
-
-Install dependencies:
+## Run locally
 
 ```bash
 pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+Open `http://localhost:8000`.
+
+Health check: `http://localhost:8000/health`
+
+## Render
+
+Build command:
+
+```bash
+pip install -r requirements.txt
+```
+
+Start command:
+
+```bash
+uvicorn app:app --host 0.0.0.0 --port $PORT
+```
+
+No `.env` file is required. Optional environment variables:
+
+- `TIMEZONE` (default: `Asia/Kolkata`)
+- `CHROMA_PATH` (default: `./chroma_db`)
+
+## Project files
+
+- `app.py` — complete FastAPI application, UI, RAG pipeline, and agent tools.
+- `requirements.txt` — Python dependencies.
+- `final_deployed_url.txt` — final Render URL placeholder to be replaced after deployment.
